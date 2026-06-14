@@ -59,7 +59,20 @@ builder.Services.AddSingleton(sp =>
     return dataSourceBuilder.Build();
 });
 
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(
+        "FusionDbStudio",
+        policy =>
+        {
+            policy.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod();
+        }
+    );
+});
+
 var app = builder.Build();
+
+app.UseCors("FusionDbStudio");
 
 app.MapGet(
     "/",
