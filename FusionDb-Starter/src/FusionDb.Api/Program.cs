@@ -156,5 +156,6 @@ app.MapCollectionEndpoints();
 app.MapDocumentEndpoints();
 app.MapSearchEndpoints();
 app.MapAskEndpoints();
+app.MapRetrievalAuditEndpoints();
 
 app.Run();
