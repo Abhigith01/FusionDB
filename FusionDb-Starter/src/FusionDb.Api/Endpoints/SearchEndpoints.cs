@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FusionDb.Api.Contracts;
 using FusionDb.Api.Contracts.Search;
 using FusionDb.Application.Embeddings;
@@ -46,6 +47,23 @@ public static class SearchEndpoints
             return Results.BadRequest(
                 new ErrorResponse("Minimum similarity must be between 0 and 1.")
             );
+        }
+
+        string? metadataFilterJson = null;
+
+        if (request.MetadataFilter is { } metadataFilter)
+        {
+            if (metadataFilter.ValueKind != JsonValueKind.Object)
+            {
+                return Results.BadRequest(
+                    new ErrorResponse("Metadata filter must be a JSON object.")
+                );
+            }
+
+            if (metadataFilter.EnumerateObject().Any())
+            {
+                metadataFilterJson = metadataFilter.GetRawText();
+            }
         }
 
         var collection = await dbContext
@@ -114,7 +132,13 @@ public static class SearchEndpoints
             from chunk in dbContext.AiDocumentChunks.AsNoTracking()
             join document in dbContext.AiDocuments.AsNoTracking()
                 on chunk.DocumentId equals document.Id
-            where document.CollectionId == collectionId && chunk.Embedding != null
+            where
+                document.CollectionId == collectionId
+                && chunk.Embedding != null
+                && (
+                    metadataFilterJson == null
+                    || EF.Functions.JsonContains(document.MetadataJson, metadataFilterJson)
+                )
             orderby chunk.Embedding!.CosineDistance(queryVector)
             select new
             {
@@ -139,6 +163,10 @@ public static class SearchEndpoints
             where
                 document.CollectionId == collectionId
                 && chunk.Embedding != null
+                && (
+                    metadataFilterJson == null
+                    || EF.Functions.JsonContains(document.MetadataJson, metadataFilterJson)
+                )
                 && chunk.SearchVector.Matches(EF.Functions.WebSearchToTsQuery("english", queryText))
             orderby chunk.SearchVector.RankCoverDensity(
                 EF.Functions.WebSearchToTsQuery("english", queryText)
