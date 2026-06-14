@@ -1,8 +1,12 @@
 using FusionDb.Api.Endpoints;
 using FusionDb.Application.Chunking;
 using FusionDb.Application.Embeddings;
+using FusionDb.Application.Generation;
+using FusionDb.Application.Search;
 using FusionDb.Infrastructure;
 using FusionDb.Infrastructure.Embeddings;
+using FusionDb.Infrastructure.Generation;
+using FusionDb.Infrastructure.Search;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,6 +19,20 @@ builder.Services.AddHttpClient<IEmbeddingGenerator, OllamaEmbeddingGenerator>(cl
 {
     client.BaseAddress = new Uri(ollamaBaseUrl);
     client.Timeout = TimeSpan.FromMinutes(5);
+});
+
+builder.Services.AddHttpClient<ITextGenerator, OllamaTextGenerator>(client =>
+{
+    client.BaseAddress = new Uri(ollamaBaseUrl);
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
+
+builder.Services.AddScoped<IHybridSearchService, HybridSearchService>();
+
+builder.Services.AddHttpClient<ITextGenerator, OllamaTextGenerator>(client =>
+{
+    client.BaseAddress = new Uri(ollamaBaseUrl);
+    client.Timeout = TimeSpan.FromMinutes(10);
 });
 
 var connectionString =
@@ -127,5 +145,6 @@ app.MapGet(
 app.MapCollectionEndpoints();
 app.MapDocumentEndpoints();
 app.MapSearchEndpoints();
+app.MapAskEndpoints();
 
 app.Run();
