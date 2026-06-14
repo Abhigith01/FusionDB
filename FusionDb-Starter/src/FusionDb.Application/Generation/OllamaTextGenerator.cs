@@ -43,7 +43,7 @@ public sealed class OllamaTextGenerator : ITextGenerator
                 new OllamaChatMessage("user", userPrompt.Trim()),
             },
             false,
-            new OllamaChatOptions(Temperature: 0, NumPredict: 300)
+            new OllamaChatOptions(Temperature: 0, NumPredict: 500)
         );
 
         using var response = await _httpClient.PostAsJsonAsync(

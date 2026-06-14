@@ -1,5 +1,6 @@
 using FusionDb.Domain.Collections;
 using FusionDb.Domain.Documents;
+using FusionDb.Domain.Observability;
 using Microsoft.EntityFrameworkCore;
 
 namespace FusionDb.Infrastructure.Persistence;
@@ -10,6 +11,8 @@ public sealed class FusionDbContext : DbContext
         : base(options) { }
 
     public DbSet<AiCollection> AiCollections => Set<AiCollection>();
+
+    public DbSet<RetrievalAudit> RetrievalAudits => Set<RetrievalAudit>();
 
     public DbSet<AiDocument> AiDocuments => Set<AiDocument>();
 

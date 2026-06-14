@@ -1,11 +1,15 @@
 using FusionDb.Api.Endpoints;
 using FusionDb.Application.Chunking;
+using FusionDb.Application.Documents;
 using FusionDb.Application.Embeddings;
 using FusionDb.Application.Generation;
+using FusionDb.Application.Observability;
 using FusionDb.Application.Search;
 using FusionDb.Infrastructure;
+using FusionDb.Infrastructure.Documents;
 using FusionDb.Infrastructure.Embeddings;
 using FusionDb.Infrastructure.Generation;
+using FusionDb.Infrastructure.Observability;
 using FusionDb.Infrastructure.Search;
 using Npgsql;
 
@@ -29,6 +33,10 @@ builder.Services.AddHttpClient<ITextGenerator, OllamaTextGenerator>(client =>
 
 builder.Services.AddScoped<IHybridSearchService, HybridSearchService>();
 
+builder.Services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
+
+builder.Services.AddScoped<IRetrievalAuditService, RetrievalAuditService>();
+
 builder.Services.AddHttpClient<ITextGenerator, OllamaTextGenerator>(client =>
 {
     client.BaseAddress = new Uri(ollamaBaseUrl);
@@ -40,6 +48,8 @@ var connectionString =
     ?? throw new InvalidOperationException("Connection string 'FusionDb' is missing.");
 
 builder.Services.AddSingleton<ITextChunker, WordTextChunker>();
+
+builder.Services.AddSingleton<IPdfTextExtractor, PdfPigTextExtractor>();
 
 builder.Services.AddInfrastructure(connectionString);
 

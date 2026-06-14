@@ -1,7 +1,8 @@
+using System.Text;
+using System.Text.Json;
 using FusionDb.Api.Contracts;
 using FusionDb.Api.Contracts.Documents;
-using FusionDb.Application.Chunking;
-using FusionDb.Application.Embeddings;
+using FusionDb.Application.Documents;
 using FusionDb.Domain.Documents;
 using FusionDb.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +11,18 @@ namespace FusionDb.Api.Endpoints;
 
 public static class DocumentEndpoints
 {
+    private const long MaximumUploadSize = 5 * 1024 * 1024;
+
+    private static readonly HashSet<string> AllowedFileExtensions = new(
+        StringComparer.OrdinalIgnoreCase
+    )
+    {
+        ".txt",
+        ".md",
+        ".markdown",
+        ".pdf",
+    };
+
     public static IEndpointRouteBuilder MapDocumentEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints
@@ -17,6 +30,7 @@ public static class DocumentEndpoints
             .WithTags("AI Documents");
 
         group.MapPost("/", CreateDocumentAsync);
+        group.MapPost("/upload", UploadDocumentAsync).DisableAntiforgery();
         group.MapGet("/", GetDocumentsAsync);
         group.MapGet("/{documentId:guid}", GetDocumentByIdAsync);
 
@@ -27,141 +41,207 @@ public static class DocumentEndpoints
         return endpoints;
     }
 
-    private static async Task<IResult> ProcessDocumentAsync(
+    private static async Task<IResult> UploadDocumentAsync(
         Guid collectionId,
-        Guid documentId,
+        IFormFile file,
         FusionDbContext dbContext,
-        ITextChunker textChunker,
-        IEmbeddingGenerator embeddingGenerator,
+        IDocumentProcessingService processingService,
+        IPdfTextExtractor pdfTextExtractor,
         CancellationToken cancellationToken
     )
     {
-        var collection = await dbContext.AiCollections.FirstOrDefaultAsync(
-            item => item.Id == collectionId,
-            cancellationToken
-        );
+        var collectionExists = await dbContext
+            .AiCollections.AsNoTracking()
+            .AnyAsync(collection => collection.Id == collectionId, cancellationToken);
 
-        if (collection is null)
+        if (!collectionExists)
         {
             return Results.NotFound(
                 new ErrorResponse($"Collection '{collectionId}' was not found.")
             );
         }
 
-        var document = await dbContext.AiDocuments.FirstOrDefaultAsync(
-            item => item.Id == documentId && item.CollectionId == collectionId,
-            cancellationToken
-        );
-
-        if (document is null)
+        if (file.Length == 0)
         {
-            return Results.NotFound(new ErrorResponse($"Document '{documentId}' was not found."));
+            return Results.BadRequest(new ErrorResponse("The uploaded file is empty."));
         }
 
-        document.MarkProcessing();
+        if (file.Length > MaximumUploadSize)
+        {
+            return Results.BadRequest(new ErrorResponse("The uploaded file cannot exceed 5 MB."));
+        }
+
+        var safeFileName = Path.GetFileName(file.FileName);
+
+        if (string.IsNullOrWhiteSpace(safeFileName))
+        {
+            return Results.BadRequest(new ErrorResponse("The uploaded file name is invalid."));
+        }
+
+        var extension = Path.GetExtension(safeFileName).ToLowerInvariant();
+
+        if (!AllowedFileExtensions.Contains(extension))
+        {
+            return Results.BadRequest(
+                new ErrorResponse("Only .txt, .md, .markdown, and .pdf files are supported.")
+            );
+        }
+
+        string content;
+        int? pageCount = null;
+
+        try
+        {
+            await using var fileStream = file.OpenReadStream();
+
+            if (extension == ".pdf")
+            {
+                var extractionResult = await pdfTextExtractor.ExtractAsync(
+                    fileStream,
+                    cancellationToken
+                );
+
+                content = extractionResult.Text;
+                pageCount = extractionResult.PageCount;
+            }
+            else
+            {
+                using var reader = new StreamReader(
+                    fileStream,
+                    Encoding.UTF8,
+                    detectEncodingFromByteOrderMarks: true
+                );
+
+                content = await reader.ReadToEndAsync(cancellationToken);
+
+                if (content.Contains('\0'))
+                {
+                    return Results.BadRequest(
+                        new ErrorResponse("The uploaded file does not appear to be a text file.")
+                    );
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            return Results.BadRequest(
+                new ErrorResponse($"The file could not be read: {exception.Message}")
+            );
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            var message =
+                extension == ".pdf"
+                    ? "The PDF contains no extractable text. " + "It may be scanned or image-only."
+                    : "The uploaded file contains no readable text.";
+
+            return Results.BadRequest(new ErrorResponse(message));
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return Results.BadRequest(
+                new ErrorResponse("The uploaded file contains no readable text.")
+            );
+        }
+
+        if (content.Contains('\0'))
+        {
+            return Results.BadRequest(
+                new ErrorResponse("The uploaded file does not appear to be a text file.")
+            );
+        }
+
+        var title = Path.GetFileNameWithoutExtension(safeFileName);
+
+        var metadataJson = JsonSerializer.Serialize(
+            new
+            {
+                source = "file-upload",
+                fileName = safeFileName,
+                extension,
+                contentType = string.IsNullOrWhiteSpace(file.ContentType) ? null : file.ContentType,
+                sizeBytes = file.Length,
+                pageCount,
+                uploadedAt = DateTimeOffset.UtcNow,
+            }
+        );
+
+        var document = AiDocument.Create(collectionId, title, content, metadataJson);
+
+        dbContext.AiDocuments.Add(document);
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
         try
         {
-            var generatedChunks = textChunker.Chunk(
-                document.Content,
-                collection.ChunkSize,
-                collection.ChunkOverlap
-            );
-
-            var chunkContents = generatedChunks.Select(chunk => chunk.Content).ToArray();
-
-            var generatedEmbeddings = await embeddingGenerator.GenerateAsync(
-                collection.EmbeddingModel,
-                chunkContents,
+            var processingResult = await processingService.ProcessAsync(
+                collectionId,
+                document.Id,
                 cancellationToken
             );
 
-            if (generatedEmbeddings.Count != generatedChunks.Count)
-            {
-                throw new InvalidOperationException(
-                    "The number of generated embeddings does not "
-                        + "match the number of document chunks."
-                );
-            }
-
-            if (generatedChunks.Count == 0)
-            {
-                throw new InvalidOperationException("The document produced no searchable chunks.");
-            }
-
-            await using var transaction = await dbContext.Database.BeginTransactionAsync(
-                cancellationToken
-            );
-
-            var existingChunks = await dbContext
-                .AiDocumentChunks.Where(chunk => chunk.DocumentId == documentId)
-                .ToListAsync(cancellationToken);
-
-            dbContext.AiDocumentChunks.RemoveRange(existingChunks);
-
-            for (var index = 0; index < generatedChunks.Count; index++)
-            {
-                var generatedChunk = generatedChunks[index];
-                var generatedEmbedding = generatedEmbeddings[index];
-
-                var chunk = AiDocumentChunk.Create(
+            return Results.Created(
+                $"/api/collections/{collectionId}" + $"/documents/{document.Id}",
+                new UploadDocumentResponse(
                     document.Id,
-                    generatedChunk.Number,
-                    generatedChunk.Content,
-                    generatedChunk.StartOffset,
-                    generatedChunk.EndOffset
-                );
-
-                chunk.SetEmbedding(
-                    generatedEmbedding,
-                    collection.EmbeddingModel,
-                    collection.VectorDimensions
-                );
-
-                dbContext.AiDocumentChunks.Add(chunk);
-
-                dbContext.AiDocumentChunks.Add(chunk);
-            }
-
-            document.MarkReady();
-
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            var savedChunk = await dbContext
-                .AiDocumentChunks.AsNoTracking()
-                .SingleAsync(
-                    chunk => chunk.DocumentId == documentId && chunk.ChunkNumber == 1,
-                    cancellationToken
-                );
-
-            await transaction.CommitAsync(cancellationToken);
-
-            return Results.Ok(
-                new ProcessDocumentResponse(
-                    document.Id,
-                    generatedChunks.Count,
-                    document.Status.ToString()
+                    document.Title,
+                    safeFileName,
+                    file.Length,
+                    pageCount,
+                    processingResult.ChunkCount,
+                    processingResult.Status
                 )
             );
         }
         catch (Exception exception)
         {
-            dbContext.ChangeTracker.Clear();
+            return Results.Problem(
+                title: "File ingestion failed",
+                detail: $"Document '{document.Id}' was created, "
+                    + $"but processing failed: "
+                    + $"{exception.Message}",
+                statusCode: StatusCodes.Status500InternalServerError
+            );
+        }
+    }
 
-            var failedDocument = await dbContext.AiDocuments.FirstOrDefaultAsync(
-                item => item.Id == documentId,
+    private static async Task<IResult> ProcessDocumentAsync(
+        Guid collectionId,
+        Guid documentId,
+        IDocumentProcessingService processingService,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            var result = await processingService.ProcessAsync(
+                collectionId,
+                documentId,
                 cancellationToken
             );
 
-            if (failedDocument is not null)
+            if (!result.CollectionFound)
             {
-                failedDocument.MarkFailed(exception.Message);
-
-                await dbContext.SaveChangesAsync(cancellationToken);
+                return Results.NotFound(
+                    new ErrorResponse($"Collection '{collectionId}' was not found.")
+                );
             }
 
+            if (!result.DocumentFound)
+            {
+                return Results.NotFound(
+                    new ErrorResponse($"Document '{documentId}' was not found.")
+                );
+            }
+
+            return Results.Ok(
+                new ProcessDocumentResponse(result.DocumentId, result.ChunkCount, result.Status)
+            );
+        }
+        catch (Exception exception)
+        {
             return Results.Problem(
                 title: "Document processing failed",
                 detail: exception.Message,

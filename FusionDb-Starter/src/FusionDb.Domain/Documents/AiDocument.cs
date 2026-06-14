@@ -5,9 +5,7 @@ namespace FusionDb.Domain.Documents;
 
 public sealed class AiDocument
 {
-    private AiDocument()
-    {
-    }
+    private AiDocument() { }
 
     public Guid Id { get; private set; }
 
@@ -33,34 +31,30 @@ public sealed class AiDocument
         Guid collectionId,
         string title,
         string content,
-        string? metadataJson)
+        string? metadataJson
+    )
     {
         if (collectionId == Guid.Empty)
         {
-            throw new ArgumentException(
-                "Collection ID is required.",
-                nameof(collectionId));
+            throw new ArgumentException("Collection ID is required.", nameof(collectionId));
         }
 
         if (string.IsNullOrWhiteSpace(title))
         {
-            throw new ArgumentException(
-                "Document title is required.",
-                nameof(title));
+            throw new ArgumentException("Document title is required.", nameof(title));
         }
 
         if (title.Trim().Length > 500)
         {
             throw new ArgumentException(
                 "Document title cannot exceed 500 characters.",
-                nameof(title));
+                nameof(title)
+            );
         }
 
         if (string.IsNullOrWhiteSpace(content))
         {
-            throw new ArgumentException(
-                "Document content is required.",
-                nameof(content));
+            throw new ArgumentException("Document content is required.", nameof(content));
         }
 
         var normalizedContent = content.Trim();
@@ -72,40 +66,38 @@ public sealed class AiDocument
             CollectionId = collectionId,
             Title = title.Trim(),
             Content = normalizedContent,
-            MetadataJson = string.IsNullOrWhiteSpace(metadataJson)
-                ? "{}"
-                : metadataJson,
+            MetadataJson = string.IsNullOrWhiteSpace(metadataJson) ? "{}" : metadataJson,
             ContentHash = CalculateHash(normalizedContent),
             Status = DocumentStatus.Pending,
             CreatedAt = currentTime,
-            UpdatedAt = currentTime
+            UpdatedAt = currentTime,
         };
     }
+
     public void MarkProcessing()
-{
-    Status = DocumentStatus.Processing;
-    FailureReason = null;
-    UpdatedAt = DateTimeOffset.UtcNow;
-}
+    {
+        Status = DocumentStatus.Processing;
+        FailureReason = null;
+        UpdatedAt = DateTimeOffset.UtcNow;
+    }
 
-public void MarkReady()
-{
-    Status = DocumentStatus.Ready;
-    FailureReason = null;
-    UpdatedAt = DateTimeOffset.UtcNow;
-}
+    public void MarkReady()
+    {
+        Status = DocumentStatus.Ready;
+        FailureReason = null;
+        UpdatedAt = DateTimeOffset.UtcNow;
+    }
 
-public void MarkFailed(string failureReason)
-{
-    Status = DocumentStatus.Failed;
+    public void MarkFailed(string failureReason)
+    {
+        Status = DocumentStatus.Failed;
 
-    FailureReason = string.IsNullOrWhiteSpace(failureReason)
-        ? "Document processing failed."
-        : failureReason.Trim();
+        FailureReason = string.IsNullOrWhiteSpace(failureReason)
+            ? "Document processing failed."
+            : failureReason.Trim();
 
-    UpdatedAt = DateTimeOffset.UtcNow;
-}
-    
+        UpdatedAt = DateTimeOffset.UtcNow;
+    }
 
     private static string CalculateHash(string content)
     {
