@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FusionDb.Api/FusionDb.Api.csproj" />
+    <Project Path="src/FusionDb.Application/FusionDb.Application.csproj" />
+    <Project Path="src/FusionDb.Domain/FusionDb.Domain.csproj" />
+    <Project Path="src/FusionDb.Infrastructure/FusionDb.Infrastructure.csproj" />
+  </Folder>
+</Solution>
